@@ -63,15 +63,28 @@ the same term is used inconsistently.
 - A stated business rule has an edge case (a boundary condition, a conflict \
 between two data sources, a timing/SLA gap) the SDD's design doesn't \
 visibly handle.
+- Operating windows, schedules, volumes and trigger frequencies stated in \
+one document don't line up with those in another. Compare business hours, \
+SLAs, polling intervals, batch timings and volumes across all three \
+documents explicitly, even where no one has quoted anything about them.
+- The meeting summary lists something as open, unresolved, deferred, or \
+"not discussed." Anything in that category is a gap by definition -- \
+convert each one into a concrete question, even if it appears nowhere else \
+in the documents.
 
 For each gap, produce a question, a short rationale explaining the delta it \
 exposes, which source document(s) it is grounded in, a supporting quote or \
 close paraphrase, and whether a hedge word directly triggered it.
 
-Do not invent scenarios that aren't grounded in the text. Do not restate a \
-business rule as if it were a gap -- only flag it if there is a genuine \
-unresolved ambiguity, conflict, or unaddressed exception. Prefer quality \
-over quantity: 5-10 well-grounded gaps beats 20 generic ones.
+You may reason about how a described real-world behaviour manifests \
+technically -- for example, a customer photographing a document on a phone \
+implies file-format and image-quality variability the design may not \
+handle -- provided the behaviour itself is described in the documents. Do \
+not invent business scenarios, rules, systems or actors that are not \
+described. Do not restate a business rule as if it were a gap: flag it only \
+where there is a genuine unresolved ambiguity, conflict, or unaddressed \
+exception. Prefer quality over quantity: 5-10 well-grounded gaps beats 20 \
+generic ones.
 """
 
 HUMAN_PROMPT_TEMPLATE = """\
