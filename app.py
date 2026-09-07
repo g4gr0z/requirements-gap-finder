@@ -1,9 +1,11 @@
 """Streamlit front end. Run from the repo root: streamlit run app.py"""
 
+import hmac
 import os
 
 import streamlit as st
 
+from src.config import get_secret
 from src.gap_detector import detect_gaps
 
 SAMPLES = {
@@ -13,6 +15,37 @@ SAMPLES = {
 }
 
 st.set_page_config(page_title="Requirements Gap Finder", layout="wide")
+
+
+def check_password() -> bool:
+    expected = get_secret("APP_PASSWORD")
+
+    # Fail closed: an unconfigured password must not leave the app open
+    if not expected:
+        st.error(
+            "APP_PASSWORD is not configured. Set it as an environment "
+            "variable or in Streamlit secrets before using this app."
+        )
+        return False
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    with st.form("login"):
+        entered = st.text_input("Password", type="password")
+        if st.form_submit_button("Enter"):
+            # Constant-time comparison avoids leaking the password via timing
+            if hmac.compare_digest(entered, expected):
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    return False
+
+
+if not check_password():
+    st.stop()
+
 
 st.title("Requirements Gap Finder")
 st.caption(
