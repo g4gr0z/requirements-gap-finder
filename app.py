@@ -7,12 +7,18 @@ import streamlit as st
 
 from src.config import get_secret
 from src.document_loader import SUPPORTED_TYPES, extract_text
-from src.gap_detector import detect_gaps
+from src.gap_detector import ROLES, Document, detect_gaps
 
 SAMPLES = {
-    "pdd": "sample_data/pdd_kyc_document_verification.md",
-    "sdd": "sample_data/sdd_kyc_document_verification.md",
-    "summary": "sample_data/meeting_summary_clarification_call.md",
+    "business": "sample_data/pdd_kyc_document_verification.md",
+    "design": "sample_data/sdd_kyc_document_verification.md",
+    "meeting": "sample_data/meeting_summary_clarification_call.md",
+}
+HINTS = {
+    "business": "PDD, BRD, SOPs, process maps, exception logs",
+    "design": "SDD, DSD, technical specifications",
+    "meeting": "One or more structured meeting summaries",
+    "supporting": "Anything else: email threads, test cases, notes",
 }
 TEMPLATE_PATH = "prompts/meeting_summary_template.md"
 
@@ -59,30 +65,51 @@ def meeting_prompt() -> str:
     return parts[1].strip() if len(parts) > 2 else ""
 
 
-def document_input(label: str, key: str, placeholder: str) -> str:
-    uploaded = st.file_uploader(
-        f"Upload {label}", type=SUPPORTED_TYPES, key=f"{key}_file"
-    )
+def extract_cached(uploaded) -> str:
+    """Extract once per file, not on every rerun."""
+    cache = st.session_state.setdefault("_extract_cache", {})
+    marker = (uploaded.name, uploaded.size)
+    if marker not in cache:
+        cache[marker] = extract_text(uploaded)
+    return cache[marker]
 
-    if uploaded is not None:
-        # Re-extract only when the file actually changes, not on every rerun
-        marker = (uploaded.name, uploaded.size)
-        if st.session_state.get(f"{key}_marker") != marker:
-            text = extract_text(uploaded)
-            st.session_state[f"{key}_marker"] = marker
-            st.session_state[key] = text
-            if not text.strip():
-                st.warning(
-                    f"No text found in {uploaded.name}. If it is a scanned "
-                    "document, paste the content in manually."
-                )
 
-    return st.text_area(
-        label,
-        value=st.session_state.get(key, ""),
-        height=260,
-        placeholder=placeholder,
+def role_input(role: str) -> list:
+    """Render one role's uploader and paste box, return its Documents."""
+    st.markdown(f"**{ROLES[role]}**")
+    st.caption(HINTS[role])
+
+    documents = []
+
+    uploaded_files = st.file_uploader(
+        "Upload files",
+        type=SUPPORTED_TYPES,
+        accept_multiple_files=True,
+        key=f"{role}_files",
+        label_visibility="collapsed",
     )
+    for uploaded in uploaded_files or []:
+        text = extract_cached(uploaded)
+        if text.strip():
+            documents.append(Document(uploaded.name, role, text))
+        else:
+            st.warning(
+                f"No text found in {uploaded.name}. If it is a scanned "
+                "document, paste the content in below."
+            )
+
+    pasted = st.text_area(
+        "Or paste content",
+        value=st.session_state.get(f"{role}_pasted", ""),
+        height=180,
+        key=f"{role}_area",
+        label_visibility="collapsed",
+        placeholder="Or paste content here...",
+    )
+    if pasted.strip():
+        documents.append(Document(f"pasted {role} content", role, pasted))
+
+    return documents
 
 
 st.title("Requirements Gap Finder")
@@ -107,11 +134,20 @@ with start_tab:
         "prompt below against the transcript in Copilot. The fixed structure "
         "matters — it is what lets the analysis compare the manual process "
         "against the automated design.\n\n"
-        "**2. Save the output.** Paste it into the meeting summary box on "
-        "the next tab.\n\n"
-        "**3. Upload the PDD and SDD** as PDF or Word, or paste them in.\n\n"
-        "**4. Review the questions** and take the ones that hold up into "
+        "**2. Add your documents** on the next tab. Any number per group, "
+        "uploaded or pasted. Later meetings can be added as they happen — "
+        "a summary that contradicts an earlier document is itself a finding."
+        "\n\n"
+        "**3. Review the questions** and take the ones that hold up into "
         "your next session with ops."
+    )
+
+    st.subheader("Why documents are grouped")
+    st.markdown(
+        "The analysis works by contrasting how the work is done today "
+        "against how the automation is designed to do it. Grouping keeps "
+        "that contrast intact — a pile of undifferentiated documents would "
+        "lose the axis the gaps are found along."
     )
 
     st.subheader("Prompt to run in Copilot after a meeting")
@@ -133,38 +169,47 @@ with start_tab:
 
 with analyse_tab:
     if st.button("Load sample documents"):
-        for key, path in SAMPLES.items():
-            st.session_state[key] = read_file(path)
-            st.session_state.pop(f"{key}_marker", None)
+        for role, path in SAMPLES.items():
+            st.session_state[f"{role}_pasted"] = read_file(path)
+            st.session_state.pop(f"{role}_area", None)
+        st.rerun()
 
-    col1, col2, col3 = st.columns(3)
+    documents = []
+    top_left, top_right = st.columns(2)
+    with top_left:
+        documents += role_input("business")
+    with top_right:
+        documents += role_input("design")
 
-    with col1:
-        pdd = document_input(
-            "PDD", "pdd", "Paste the Process Definition Document..."
-        )
-    with col2:
-        sdd = document_input(
-            "SDD", "sdd", "Paste the Solution Design Document..."
-        )
-    with col3:
-        summary = document_input(
-            "Meeting summary", "summary",
-            "Paste the structured meeting summary...",
-        )
+    bottom_left, bottom_right = st.columns(2)
+    with bottom_left:
+        documents += role_input("meeting")
+    with bottom_right:
+        documents += role_input("supporting")
+
+    roles_present = {d.role for d in documents}
 
     if st.button("Find gaps", type="primary"):
-        if not (pdd.strip() and sdd.strip() and summary.strip()):
-            st.warning("All three documents are needed.")
+        # The comparison needs both sides of the contrast to mean anything
+        if "design" not in roles_present:
+            st.warning("A solution design document is needed.")
+        elif not roles_present & {"business", "meeting"}:
+            st.warning(
+                "At least one business/process document or meeting summary "
+                "is needed to compare the design against."
+            )
         else:
             with st.spinner("Analysing..."):
                 try:
-                    result = detect_gaps(pdd, sdd, summary)
+                    result = detect_gaps(documents)
                 except Exception as e:
                     st.error(str(e))
                     st.stop()
 
-            st.success(f"{len(result.gaps)} gaps found")
+            st.success(
+                f"{len(result.gaps)} gaps found across "
+                f"{len(documents)} documents"
+            )
 
             # Hedge-anchored gaps first: they carry the strongest signal
             for i, gap in enumerate(
